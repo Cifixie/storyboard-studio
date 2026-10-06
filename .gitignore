@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+packages/*/node_modules/
+
+# Next.js
+packages/client/.next/
+packages/client/.open-next/
+
+# Env
+.env
+.env.local
+.env*.local
+
+# OS
+.DS_Store
+*.swp
+*~
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# local database
+data/
+
+# Python venv (local model tooling)
+.venv/
+
+# Generated media (images, narration, uploads)
+packages/client/public/media/
+
+# TypeScript incremental build info
+*.tsbuildinfo

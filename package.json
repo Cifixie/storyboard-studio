@@ -1,0 +1,12 @@
+{
+  "name": "storyboard-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Interactive story editor, scene/frame timeline builder, and media reader",
+  "scripts": {
+    "dev": "pnpm --filter @storyboard-studio/client dev",
+    "build": "pnpm --filter @storyboard-studio/client build",
+    "start": "pnpm --filter @storyboard-studio/client start",
+    "lint": "pnpm -r lint"
+  }
+}
