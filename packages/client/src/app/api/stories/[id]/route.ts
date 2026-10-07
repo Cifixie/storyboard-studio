@@ -19,6 +19,18 @@ export async function GET(_req: NextRequest, { params }: Context) {
  * sceneId/frameId in the body. Ids not in the asset library are dropped, so a
  * deleted asset cannot leave a dangling link behind.
  */
+/**
+ * Two mutation modes on one route:
+ *
+ * **Asset links** (scene / frame): body carries `sceneId` (and optionally
+ * `frameId`) plus `assetIds`.  Assets not in the library are dropped so a
+ * deleted asset cannot leave a dangling link behind.
+ *
+ * **Character assignment**: body carries `characterName` and optionally
+ * `characterAssetId`.  When `characterAssetId` is present (even `null`) the
+ * story-level mapping is updated — `null` clears the assignment for that
+ * character.
+ */
 export async function PATCH(req: NextRequest, { params }: Context) {
   const { id } = await params;
   try {
@@ -26,7 +38,27 @@ export async function PATCH(req: NextRequest, { params }: Context) {
       sceneId?: string;
       frameId?: string;
       assetIds?: unknown;
+      characterName?: string;
+      characterAssetId?: string | null;
     };
+
+    // Character assignment path
+    const charName = body.characterName;
+    if (typeof charName === "string") {
+      const story = mutateStory(id, (s): Story | null => {
+        if (!s.characterAssetIds) s.characterAssetIds = {};
+        if (body.characterAssetId == null) {
+          delete s.characterAssetIds[charName];
+        } else {
+          s.characterAssetIds[charName] = body.characterAssetId;
+        }
+        return s;
+      });
+      if (!story) return NextResponse.json({ error: "Story not found" }, { status: 404 });
+      return NextResponse.json({ story });
+    }
+
+    // Asset-link path (scene / frame)
     if (typeof body.sceneId !== "string" || !Array.isArray(body.assetIds)) {
       return NextResponse.json({ error: "sceneId and assetIds are required" }, { status: 400 });
     }

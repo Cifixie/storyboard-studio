@@ -22,6 +22,13 @@ export function normalizeStory(story: Story): Story {
     (ids ?? []).filter((id) => knownIds.has(id));
   story.characters ??= [];
   story.props ??= [];
+  // Prune character asset assignments whose character was removed or whose asset no longer exists.
+  if (story.characterAssetIds) {
+    const charNames = new Set(story.characters.map((c) => c.name));
+    story.characterAssetIds = Object.fromEntries(
+      Object.entries(story.characterAssetIds).filter(([name, id]) => charNames.has(name) && knownIds.has(id)),
+    );
+  }
 
   let n = 0;
   story.scenes = story.scenes.map((scene, i) => {

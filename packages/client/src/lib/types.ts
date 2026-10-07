@@ -11,6 +11,8 @@ export interface Story {
   props: Character[];      // prominent items, same fixed-look shape
   scenes: Scene[];
   createdAt: string;
+  /** Story-level mapping from character name → character asset id. Resolved before the cast description fallback. */
+  characterAssetIds?: Record<string, string>;
   updatedAt: string;
 }
 

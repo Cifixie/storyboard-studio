@@ -1,13 +1,18 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import { useStoryStore } from "@/lib/store/StoryStore";
 import { stopWriteAll, writeAllScenes, writeScene } from "@/lib/generation";
+import { fetchAssets } from "@/lib/assets";
+import { type Asset } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import { FrameCard } from "./FrameCard";
 import { AssetLinkPicker } from "./AssetLinkPicker";
-import { Loader2, PenLine, RefreshCw } from "lucide-react";
+import { Loader2, PenLine, RefreshCw, Sparkles } from "lucide-react";
 
 export function SceneTimeline() {
   const story = useStoryStore((s) => s.story);
@@ -17,6 +22,24 @@ export function SceneTimeline() {
   const writeAll = useStoryStore((s) => s.writeAll);
   const setActiveScene = useStoryStore((s) => s.setActiveScene);
   const replaceFrame = useStoryStore((s) => s.replaceFrame);
+
+  // Cached character assets for the assignment dropdown.
+  const [charAssets, setCharAssets] = useState<Asset[]>([]);
+  useEffect(() => {
+    fetchAssets().then((assets) => setCharAssets(assets.filter((a): a is Asset => a.type === "character")));
+  }, []);
+
+  /** Assign or clear a character asset for one story character. */
+  const assignCharAsset = useCallback(async (charName: string, assetId: string | null) => {
+    if (!story) return;
+    await fetch(`/api/stories/${story.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ characterName: charName, characterAssetId: assetId }),
+    }).then((r) => r.json()).then((body) => {
+      if (body.story) useStoryStore.getState().applyStory(body.story);
+    });
+  }, [story]);
 
   if (!story) return null;
 
@@ -111,12 +134,40 @@ export function SceneTimeline() {
               Cast ({story.characters.length})
             </summary>
             <dl className="mt-3 max-h-56 space-y-3 overflow-y-auto pr-1">
-              {story.characters.map((c) => (
-                <div key={c.name}>
-                  <dt className="text-sm font-medium">{c.name}</dt>
-                  <dd className="text-xs leading-relaxed text-muted-foreground">{c.description}</dd>
-                </div>
-              ))}
+              {story.characters.map((c) => {
+                const assignedId = story.characterAssetIds?.[c.name];
+                const assigned = assignedId ? charAssets.find((a) => a.id === assignedId) : undefined;
+                return (
+                  <div key={c.name} className="space-y-1">
+                    <dt className="flex items-center justify-between text-sm font-medium">
+                      <span>{c.name}</span>
+                      <Select
+                        value={assignedId ?? ""}
+                        onValueChange={(val) => assignCharAsset(c.name, val === "" ? null : val)}
+                      >
+                        <SelectTrigger className="h-6 w-[140px]">
+                          <SelectValue placeholder="— none —" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">— none —</SelectItem>
+                          {charAssets.map((a) => (
+                            <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </dt>
+                    <dd className="text-xs leading-relaxed text-muted-foreground">{c.description}</dd>
+                    {assigned && (
+                      <div className="flex items-center gap-1">
+                        <Sparkles className="size-3 text-amber-500" />
+                        <Badge variant="secondary" className="h-4 rounded-sm px-1 font-mono text-[9px] leading-none">
+                          {assigned.metadata.triggerToken ?? assigned.name}
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </dl>
           </details>
         )}

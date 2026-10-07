@@ -193,13 +193,34 @@ export function composeImagePrompt(story: Story, frame: Frame, assets: Asset[] =
     return text ? `${name} is ${text}${tok ? ` [${tok}]` : ""}` : name;
   };
 
-  // frame.characters is authoritative: a linked asset speaks for its entry,
-  // everyone else keeps the story's fixed-look text.
+  // Resolve each frame character through three tiers:
+  //   1. Frame-level explicit asset link with a matching name
+  //   2. Story-level characterAssetIds mapping
+  //   3. Story.characters description fallback
+  // Deduplicate: same asset id emits only once even when resolved at multiple scopes.
+  const seenAsset = new Set<string>();
   const cast = frame.characters
     .map((name) => {
-      const asset = linked.find((a) => a.type === "character" && a.name === name);
+      // Tier 1: frame-level link
+      const frameAsset = frame.assetIds
+        ?.map((id) => byId.get(id))
+        .find((a) => {
+          if (!a) return false;
+          return a.type === "character" && a.name === name;
+        });
+      if (frameAsset && !seenAsset.has(frameAsset.id)) {
+        seenAsset.add(frameAsset.id);
+        return describe(frameAsset.name, frameAsset.metadata.description, frameAsset.metadata.triggerToken);
+      }
+      // Tier 2: story-level assignment
+      const storyAssetId = story.characterAssetIds?.[name];
+      const storyAsset = storyAssetId ? byId.get(storyAssetId) : undefined;
+      if (storyAsset && !seenAsset.has(storyAsset.id)) {
+        seenAsset.add(storyAsset.id);
+        return describe(storyAsset.name, storyAsset.metadata.description, storyAsset.metadata.triggerToken);
+      }
+      // Tier 3: story description fallback
       const fallback = story.characters.find((c) => c.name === name);
-      if (asset) return describe(asset.name, asset.metadata.description, asset.metadata.triggerToken);
       if (fallback) return describe(fallback.name, fallback.description, undefined);
       return null;
     })
