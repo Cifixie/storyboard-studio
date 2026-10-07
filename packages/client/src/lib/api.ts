@@ -58,3 +58,18 @@ export async function fetchStory(id: string): Promise<Story> {
 export async function removeStory(id: string): Promise<void> {
   await request(`/api/stories/${id}`, { method: "DELETE" });
 }
+
+/** Assign or clear a character asset for one story character. Returns the saved story. */
+export async function assignCharacterAsset(
+  storyId: string,
+  characterName: string,
+  characterAssetId: string | null,
+): Promise<Story> {
+  return (
+    await request<{ story: Story }>(`/api/stories/${storyId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ characterName, characterAssetId }),
+    })
+  ).story;
+}

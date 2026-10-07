@@ -15,11 +15,6 @@ export async function GET(_req: NextRequest, { params }: Context) {
 }
 
 /**
- * Explicit asset links: sets `assetIds` on one scene or one frame, addressed by
- * sceneId/frameId in the body. Ids not in the asset library are dropped, so a
- * deleted asset cannot leave a dangling link behind.
- */
-/**
  * Two mutation modes on one route:
  *
  * **Asset links** (scene / frame): body carries `sceneId` (and optionally
@@ -46,6 +41,8 @@ export async function PATCH(req: NextRequest, { params }: Context) {
     const charName = body.characterName;
     if (typeof charName === "string") {
       const story = mutateStory(id, (s): Story | null => {
+        const charNames = new Set(s.characters.map((c) => c.name));
+        if (!charNames.has(charName)) throw new NotFoundError("Character not found in cast");
         if (!s.characterAssetIds) s.characterAssetIds = {};
         if (body.characterAssetId == null) {
           delete s.characterAssetIds[charName];

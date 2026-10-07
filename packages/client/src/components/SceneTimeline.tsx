@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useStoryStore } from "@/lib/store/StoryStore";
 import { stopWriteAll, writeAllScenes, writeScene } from "@/lib/generation";
 import { fetchAssets } from "@/lib/assets";
+import { assignCharacterAsset } from "@/lib/api";
 import { type Asset } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -26,19 +27,20 @@ export function SceneTimeline() {
   // Cached character assets for the assignment dropdown.
   const [charAssets, setCharAssets] = useState<Asset[]>([]);
   useEffect(() => {
-    fetchAssets().then((assets) => setCharAssets(assets.filter((a): a is Asset => a.type === "character")));
+    fetchAssets()
+      .then((assets) => setCharAssets(assets.filter((a): a is Asset => a.type === "character")))
+      .catch(() => {});
   }, []);
 
   /** Assign or clear a character asset for one story character. */
   const assignCharAsset = useCallback(async (charName: string, assetId: string | null) => {
     if (!story) return;
-    await fetch(`/api/stories/${story.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ characterName: charName, characterAssetId: assetId }),
-    }).then((r) => r.json()).then((body) => {
-      if (body.story) useStoryStore.getState().applyStory(body.story);
-    });
+    try {
+      const saved = await assignCharacterAsset(story.id, charName, assetId);
+      useStoryStore.getState().applyStory(saved);
+    } catch (e) {
+      console.error("Failed to assign character asset:", e);
+    }
   }, [story]);
 
   if (!story) return null;
@@ -142,14 +144,14 @@ export function SceneTimeline() {
                     <dt className="flex items-center justify-between text-sm font-medium">
                       <span>{c.name}</span>
                       <Select
-                        value={assignedId ?? ""}
-                        onValueChange={(val) => assignCharAsset(c.name, val === "" ? null : val)}
+                        value={assignedId ?? null}
+                        items={[{ label: "— none —", value: null }, ...charAssets.map((a) => ({ label: a.name, value: a.id } as const))]}
+                        onValueChange={(val: string | null) => assignCharAsset(c.name, val)}
                       >
                         <SelectTrigger className="h-6 w-[140px]">
                           <SelectValue placeholder="— none —" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">— none —</SelectItem>
                           {charAssets.map((a) => (
                             <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
                           ))}

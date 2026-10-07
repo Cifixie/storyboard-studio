@@ -217,7 +217,7 @@ export function composeImagePrompt(story: Story, frame: Frame, assets: Asset[] =
       const storyAsset = storyAssetId ? byId.get(storyAssetId) : undefined;
       if (storyAsset && !seenAsset.has(storyAsset.id)) {
         seenAsset.add(storyAsset.id);
-        return describe(storyAsset.name, storyAsset.metadata.description, storyAsset.metadata.triggerToken);
+        return describe(name, storyAsset.metadata.description, storyAsset.metadata.triggerToken);
       }
       // Tier 3: story description fallback
       const fallback = story.characters.find((c) => c.name === name);
