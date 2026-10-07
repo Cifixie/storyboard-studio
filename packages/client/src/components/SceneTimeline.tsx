@@ -152,6 +152,7 @@ export function SceneTimeline() {
                           <SelectValue placeholder="— none —" />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value={null}>— none —</SelectItem>
                           {charAssets.map((a) => (
                             <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
                           ))}
