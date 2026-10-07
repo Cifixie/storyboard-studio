@@ -5,6 +5,7 @@ import { useStoryStore } from "@/lib/store/StoryStore";
 import { fetchAssets, createAsset, uploadAsset, removeAsset, triggerTokenFor, suggestAllAssets, generateReferenceImage, attachAssetImage, type AssetSuggestion, type NewAsset } from "@/lib/assets";
 import type { Asset, AssetType } from "@/lib/types";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -26,7 +27,6 @@ export function AssetStudio() {
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const bulkAbortRef = useRef(false);
   const story = useStoryStore((s) => s.story);
-
   const refresh = () => fetchAssets().then(setAssets).catch((e) => console.error("Could not load assets", e));
   useEffect(() => { refresh(); }, []);
 
@@ -35,15 +35,44 @@ export function AssetStudio() {
   const visible = assets.filter((a) => a.type === activeFilter);
   const missing = suggestions.length + visible.filter((a) => !a.filePath).length;
 
+  const toastIds = useRef(new Map<string, string>());
+  const showProgress = (key: string, asset: string, current: number, total: number, stage?: string) => {
+    const description = progressDescription(asset, current, total, stage);
+    const toastId = toastIds.current.get(key);
+    if (toastId) {
+      toast.update(toastId, { type: "loading", description, timeout: 0 });
+      return;
+    }
+    toastIds.current.set(key, toast.add({ type: "loading", title: `Generating ${asset}`, description, timeout: 0 }));
+  };
+  const finishProgress = (key: string, asset: string, error?: string) => {
+    const toastId = toastIds.current.get(key);
+    if (!toastId) return;
+    toast.update(toastId, error
+      ? { type: "error", title: `Could not generate ${asset}`, description: error, timeout: 0 }
+      : { type: "success", title: `${asset} ready`, description: "Reference image saved.", timeout: 4500 });
+    toastIds.current.delete(key);
+  };
+  const progressDescription = (asset: string, current: number, total: number, stage?: string) => (
+    <div className="w-full">
+      <p>{stage ?? (total > 0 ? `Image step ${current} of ${total}` : "Starting image generation…")}</p>
+      {!stage && total > 0 && (
+        <div role="progressbar" aria-label={`Generating ${asset}`} aria-valuemin={0} aria-valuemax={total} aria-valuenow={current} className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${Math.min(100, current / total * 100)}%` }} />
+        </div>
+      )}
+    </div>
+  );
+
   /** Generate an image and attach it to an existing asset slot. */
-  const generateAndAttach = async (s: AssetSuggestion & { id: string }) => {
-    const prompt = [
-      story?.style,
-      `Reference sheet: ${s.description ?? `${s.type} named ${s.name}`}`,
-    ]
+  const generateAndAttach = async (s: AssetSuggestion & { id: string }, toastKey?: string) => {
+    const prompt = [story?.style, `Reference sheet: ${s.description ?? `${s.type} named ${s.name}`}`]
       .filter(Boolean)
       .join(". ");
-    const { url } = await generateReferenceImage(prompt);
+    const { url } = await generateReferenceImage(prompt, toastKey ? (progress) => {
+      showProgress(toastKey, s.name, progress.current, progress.total);
+    } : undefined);
+    if (toastKey) showProgress(toastKey, s.name, 0, 0, "Saving reference image…");
     const blob = await fetch(url).then((r) => r.blob());
     return attachAssetImage(s.id, { name: s.name, type: s.type, triggerToken: s.triggerToken, description: s.description }, blob);
   };
@@ -78,24 +107,27 @@ export function AssetStudio() {
     for (let i = 0; i < queue.length; i++) {
       if (bulkAbortRef.current || useStoryStore.getState().story?.id !== originalStoryId) break;
       const item = queue[i];
-      const key = `${item.type}:${item.name}`;
-      setGeneratingSuggestion(key);
+      const key = `bulk:${item.type}:${item.name}`;
+      setGeneratingSuggestion(`${item.type}:${item.name}`);
+      showProgress(key, item.name, 0, 0);
       try {
+        let result: Asset;
         if (item.id) {
-          // Existing slot: attach image directly
-          await generateAndAttach({ ...item, id: item.id });
+          result = await generateAndAttach({ ...item, id: item.id }, key);
         } else {
-          // New slot: create + attach
           const slot = await createAsset({
             name: item.name,
             type: item.type,
             triggerToken: item.triggerToken,
             description: item.description,
           });
-          await generateAndAttach({ ...item, id: slot.id });
+          result = await generateAndAttach({ ...item, id: slot.id }, key);
         }
-      } catch {
-        setChipError((prev) => ({ ...prev, [key]: "Generation failed" }));
+        setAssets((current) => [...current.filter((asset) => asset.id !== result.id), result]);
+        finishProgress(key, item.name);
+      } catch (e) {
+        setChipError((prev) => ({ ...prev, [`${item.type}:${item.name}`]: "Generation failed" }));
+        finishProgress(key, item.name, e instanceof Error ? e.message : "Generation failed");
       } finally {
         setBulkProgress({ current: i + 1, total });
         setGeneratingSuggestion(null);
@@ -297,13 +329,26 @@ export function AssetStudio() {
         prefill={prefill}
         onClose={() => setDialogOpen(false)}
         onSaved={() => { setDialogOpen(false); refresh(); }}
-        onGenerateImage={(asset) => generateAndAttach({
-          id: asset.id,
-          name: asset.name,
-          type: asset.type,
-          description: asset.metadata.description,
-          triggerToken: asset.metadata.triggerToken ?? triggerTokenFor(asset.name),
-        })}
+        onGenerateImage={async (asset) => {
+          setDialogOpen(false);
+          const key = `single:${asset.id}`;
+          showProgress(key, asset.name, 0, 0);
+          try {
+            const generated = await generateAndAttach({
+              id: asset.id,
+              name: asset.name,
+              type: asset.type,
+              description: asset.metadata.description,
+              triggerToken: asset.metadata.triggerToken ?? triggerTokenFor(asset.name),
+            }, key);
+            setAssets((current) => [...current.filter((item) => item.id !== generated.id), generated]);
+            finishProgress(key, asset.name);
+            return generated;
+          } catch (error) {
+            finishProgress(key, asset.name, error instanceof Error ? error.message : "Generation failed");
+            throw error;
+          }
+        }}
       />
       <MediaBrowser open={mediaOpen} onClose={() => setMediaOpen(false)} />
     </div>

@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { generateFrameAudio, generateFrameImage } from "@/lib/api";
+import { generateFrameAudio } from "@/lib/api";
+import { enqueueFrameImage } from "@/lib/generation";
+import { useStoryStore } from "@/lib/store/StoryStore";
 import type { Frame, Scene } from "@/lib/types";
 import { AssetLinkPicker } from "./AssetLinkPicker";
 import { Button } from "@/components/ui/button";
@@ -23,37 +25,38 @@ const STATUS: Record<Frame["status"], { label: string; dot: string }> = {
   error: { label: "Error", dot: "bg-destructive" },
 };
 
+
 export function FrameCard({ storyId, frame, scene, isActive, onUpdated }: FrameCardProps) {
-  const [imageGenerating, setImageGenerating] = useState(false);
+  const imageQueue = useStoryStore((state) => state.imageQueue);
   const [audioGenerating, setAudioGenerating] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
-
-  // The server saves results and errors on the frame. Only "in progress" is local.
-  const busy = imageGenerating || audioGenerating;
-  const status = STATUS[busy ? "generating" : frame.status];
+  const generating = imageQueue.active?.storyId === storyId && imageQueue.active.frameId === frame.id;
+  const queued = imageQueue.pending.some((item) => item.storyId === storyId && item.frameId === frame.id);
+  const imageBusy = generating || queued;
+  const busy = imageBusy || audioGenerating;
+  const status = busy
+    ? queued && !generating
+      ? { label: "Queued", dot: "bg-primary/70" }
+      : STATUS.generating
+    : STATUS[frame.status];
   const error = requestError ?? frame.error;
 
-  const run = async (
-    start: () => void,
-    finish: () => void,
-    job: () => Promise<Frame>
-  ) => {
-    start();
+  const handleGenerateImage = () => {
+    setRequestError(null);
+    enqueueFrameImage(storyId, frame.id);
+  };
+
+  const handleGenerateAudio = async () => {
+    setAudioGenerating(true);
     setRequestError(null);
     try {
-      onUpdated(await job());
+      onUpdated(await generateFrameAudio(storyId, frame.id));
     } catch (e) {
       setRequestError(e instanceof Error ? e.message : "Generation failed");
     } finally {
-      finish();
+      setAudioGenerating(false);
     }
   };
-
-  const handleGenerateImage = () =>
-    run(() => setImageGenerating(true), () => setImageGenerating(false), () => generateFrameImage(storyId, frame.id));
-
-  const handleGenerateAudio = () =>
-    run(() => setAudioGenerating(true), () => setAudioGenerating(false), () => generateFrameAudio(storyId, frame.id));
 
   return (
     <article
@@ -64,7 +67,7 @@ export function FrameCard({ storyId, frame, scene, isActive, onUpdated }: FrameC
       {/* Panel */}
       <div className="space-y-2.5">
         <div className="relative aspect-video overflow-hidden rounded-md bg-background ring-1 ring-border">
-          {imageGenerating ? (
+          {generating ? (
             <Skeleton className="size-full rounded-none" />
           ) : frame.imageUrl ? (
             <img src={frame.imageUrl} alt={frame.description} className="size-full object-cover" />
@@ -86,9 +89,9 @@ export function FrameCard({ storyId, frame, scene, isActive, onUpdated }: FrameC
             {status.label}
           </span>
           <AssetLinkPicker storyId={storyId} scene={scene} frame={frame} types={["character", "prop"]} label="Assets" />
-          <Button variant="outline" size="sm" onClick={handleGenerateImage} disabled={!frame.prompt || imageGenerating}>
-            {imageGenerating ? <Loader2 className="animate-spin" /> : frame.imageUrl ? <RefreshCw /> : <ImageIcon />}
-            {imageGenerating ? "Generating…" : frame.imageUrl ? "Regenerate image" : "Generate image"}
+          <Button variant="outline" size="sm" onClick={handleGenerateImage} disabled={!frame.prompt.trim() || imageBusy || audioGenerating}>
+            {generating ? <Loader2 className="animate-spin" /> : frame.imageUrl ? <RefreshCw /> : <ImageIcon />}
+            {generating ? "Generating…" : queued ? "Queued" : frame.imageUrl ? "Regenerate image" : "Generate image"}
           </Button>
         </div>
       </div>

@@ -39,8 +39,46 @@ export async function linkAssets(storyId: string, sceneId: string, assetIds: str
   })).story;
 }
 
-export async function generateFrameImage(storyId: string, frameId: string): Promise<Frame> {
-  return (await request<{ frame: Frame }>("/api/image/generate", post({ storyId, frameId }))).frame;
+export interface FrameImageProgress {
+  current: number;
+  total: number;
+}
+
+export async function generateFrameImage(
+  storyId: string,
+  frameId: string,
+  onProgress?: (progress: FrameImageProgress) => void,
+): Promise<Frame> {
+  const res = await fetch("/api/image/generate", {
+    ...post({ storyId, frameId }),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error ?? `HTTP ${res.status}`);
+  }
+  if (!res.body) throw new Error("Image generation returned no progress stream");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+    for (const block of events) {
+      const event = block.match(/^event: (.+)$/m)?.[1];
+      const data = block.match(/^data: (.+)$/m)?.[1];
+      if (!event || !data) continue;
+      const payload = JSON.parse(data);
+      if (event === "progress") onProgress?.(payload as FrameImageProgress);
+      if (event === "done") return (payload as { frame: Frame }).frame;
+      if (event === "error") throw new Error(payload.error ?? "Image generation failed");
+    }
+    if (done) break;
+  }
+  throw new Error("Image generation stream ended without a result");
 }
 
 export async function generateFrameAudio(storyId: string, frameId: string): Promise<Frame> {

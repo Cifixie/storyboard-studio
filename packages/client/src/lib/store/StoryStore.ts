@@ -4,6 +4,23 @@ import type { StorySummary } from "@/lib/db";
 
 export type SceneWork = { state: "writing" } | { state: "error"; message: string };
 
+export interface ImageQueueItem {
+  storyId: string;
+  sceneId: string;
+  frameId: string;
+  frameIndex: number;
+  prompt: string;
+  onlyIfMissing: boolean;
+}
+
+export interface ImageQueueState {
+  pending: ImageQueueItem[];
+  active: ImageQueueItem | null;
+  completed: number;
+  failed: number;
+  lastError: string | null;
+}
+
 interface StoryState {
   story: Story | null;
   activeSceneIndex: number;
@@ -13,6 +30,8 @@ interface StoryState {
   sceneWork: Record<string, SceneWork>;
   /** Progress of "Write all"; null when it is not running. */
   writeAll: { current: number; total: number; stopping: boolean } | null;
+  /** In-memory image queue; never persisted to the story. */
+  imageQueue: ImageQueueState;
 
   setLibrary: (library: StorySummary[]) => void;
   /** Opens a different story and returns to its first scene. */
@@ -24,7 +43,17 @@ interface StoryState {
   setActiveFrame: (index: number) => void;
   setSceneWork: (sceneId: string, work: SceneWork | null) => void;
   setWriteAll: (progress: StoryState["writeAll"]) => void;
+  enqueueImages: (items: ImageQueueItem[]) => void;
+  startNextImage: () => ImageQueueItem | null;
+  finishImage: (item: ImageQueueItem, outcome: "success" | "failure" | "skipped", error?: string) => void;
 }
+export const EMPTY_IMAGE_QUEUE: ImageQueueState = {
+  pending: [],
+  active: null,
+  completed: 0,
+  failed: 0,
+  lastError: null,
+};
 
 export const useStoryStore = create<StoryState>((set) => ({
   story: null,
@@ -33,10 +62,21 @@ export const useStoryStore = create<StoryState>((set) => ({
   library: [],
   sceneWork: {},
   writeAll: null,
+  imageQueue: EMPTY_IMAGE_QUEUE,
 
   setLibrary: (library) => set({ library }),
 
-  setStory: (story) => set({ story, activeSceneIndex: 0, activeFrameIndex: 0, sceneWork: {}, writeAll: null }),
+  setStory: (story) =>
+    set((state) => ({
+      story,
+      activeSceneIndex: 0,
+      activeFrameIndex: 0,
+      sceneWork: {},
+      writeAll: null,
+      ...(state.story?.id !== story?.id
+        ? { imageQueue: { ...EMPTY_IMAGE_QUEUE, active: state.imageQueue.active } }
+        : {}),
+    })),
 
   applyStory: (story) => set({ story }),
 
@@ -64,4 +104,59 @@ export const useStoryStore = create<StoryState>((set) => ({
     }),
 
   setWriteAll: (writeAll) => set({ writeAll }),
+
+  enqueueImages: (items) =>
+    set((state) => {
+      if (!state.story || items.length === 0) return state;
+      const { imageQueue } = state;
+      const known = new Set([
+        ...(imageQueue.active ? [`${imageQueue.active.storyId}:${imageQueue.active.frameId}`] : []),
+        ...imageQueue.pending.map((item) => `${item.storyId}:${item.frameId}`),
+      ]);
+      const additions = items.filter((item) => {
+        const key = `${item.storyId}:${item.frameId}`;
+        if (item.storyId !== state.story?.id || known.has(key)) return false;
+        known.add(key);
+        return true;
+      });
+      if (additions.length === 0) return state;
+      const newBatch = imageQueue.active === null && imageQueue.pending.length === 0;
+      return {
+        imageQueue: {
+          ...imageQueue,
+          pending: [...imageQueue.pending, ...additions],
+          ...(newBatch ? { completed: 0, failed: 0, lastError: null } : {}),
+        },
+      };
+    }),
+
+  startNextImage: () => {
+    let item: ImageQueueItem | null = null;
+    set((state) => {
+      if (state.imageQueue.active || state.imageQueue.pending.length === 0) return state;
+      item = state.imageQueue.pending[0];
+      return {
+        imageQueue: { ...state.imageQueue, pending: state.imageQueue.pending.slice(1), active: item },
+      };
+    });
+    return item;
+  },
+
+  finishImage: (item, outcome, error) =>
+    set((state) => {
+      const { imageQueue } = state;
+      if (imageQueue.active?.storyId !== item.storyId || imageQueue.active.frameId !== item.frameId) return state;
+      const countsTowardCurrentStory = state.story?.id === item.storyId;
+      return {
+        imageQueue: {
+          ...imageQueue,
+          active: null,
+          ...(countsTowardCurrentStory && outcome === "success" ? { completed: imageQueue.completed + 1 } : {}),
+          ...(countsTowardCurrentStory && outcome === "failure"
+            ? { failed: imageQueue.failed + 1, lastError: error ?? "Image generation failed" }
+            : {}),
+        },
+      };
+    }),
 }));
+

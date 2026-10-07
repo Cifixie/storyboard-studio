@@ -52,7 +52,10 @@ All settings are environment variables, listed with their defaults in [`packages
 | `LLM_THINKING` | Let local reasoning models think before answering (slow) |
 | `TTS_MODEL`, `TTS_VOICE` | Narration model and voice |
 | `DB_PATH`, `IMAGE_MEDIA_DIR`, `TTS_MEDIA_DIR` | Where the database and generated media are stored |
-| `IMAGE_TIMEOUT_SECONDS` | Hard cap on one `mflux` spawn, in seconds (default 300). A cold model download can exceed this — see `gotchas.md`. |
+| `IMAGE_STEPS` | Image inference steps (default 20; mflux Qwen 2.1 defaults to 40). Lower is faster; higher may add detail. |
+| `FRAME_IMAGE_WIDTH`, `FRAME_IMAGE_HEIGHT` | Frame resolution in pixels (default 768×432). Dimensions must be multiples of 16; fewer pixels reduce generation time. |
+| `IMAGE_WIDTH`, `IMAGE_HEIGHT` | Reference/standalone image resolution (default 768×768). |
+| `IMAGE_TIMEOUT_SECONDS` | Hard cap on one `mflux` spawn, in seconds (default 3600). Override for slower inference or a cold model download. |
 | `HF_TOKEN` | HuggingFace token used by `mflux` for model weight downloads. Inference stays local; only the first download hits HF. |
 
 ## Project layout

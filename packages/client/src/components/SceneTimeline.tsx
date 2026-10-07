@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useStoryStore } from "@/lib/store/StoryStore";
-import { stopWriteAll, writeAllScenes, writeScene } from "@/lib/generation";
+import { enqueueSceneImages, stopWriteAll, writeAllScenes, writeScene } from "@/lib/generation";
 import { fetchAssets } from "@/lib/assets";
 import { assignCharacterAsset } from "@/lib/api";
 import { type Asset } from "@/lib/types";
@@ -20,6 +20,7 @@ export function SceneTimeline() {
   const activeSceneIndex = useStoryStore((s) => s.activeSceneIndex);
   const activeFrameIndex = useStoryStore((s) => s.activeFrameIndex);
   const sceneWork = useStoryStore((s) => s.sceneWork);
+  const imageQueue = useStoryStore((s) => s.imageQueue);
   const writeAll = useStoryStore((s) => s.writeAll);
   const setActiveScene = useStoryStore((s) => s.setActiveScene);
   const replaceFrame = useStoryStore((s) => s.replaceFrame);
@@ -49,6 +50,16 @@ export function SceneTimeline() {
   if (!scene) return null;
 
   const work = sceneWork[scene.id];
+  const currentStoryItems = imageQueue.pending.filter((item) => item.storyId === story.id);
+  const activeStoryItem = imageQueue.active?.storyId === story.id ? imageQueue.active : null;
+  const currentSceneItems = currentStoryItems.filter((item) => item.sceneId === scene.id);
+  const activeSceneItem = activeStoryItem?.sceneId === scene.id ? activeStoryItem : null;
+  const queuedFrameIds = new Set(currentStoryItems.map((item) => item.frameId));
+  if (activeStoryItem) queuedFrameIds.add(activeStoryItem.frameId);
+  const hasImagesToQueue = scene.frames.some((frame) => !frame.imageUrl && frame.prompt.trim() && !queuedFrameIds.has(frame.id));
+  const imageWorkInProgress = currentSceneItems.length > 0 || activeSceneItem !== null;
+  const imageQueueInProgress = currentStoryItems.length > 0 || activeStoryItem !== null;
+  const imageFailed = imageQueueInProgress || imageQueue.failed > 0 && imageQueue.pending.length === 0 && !imageQueue.active ? imageQueue.failed : 0;
   const writing = work?.state === "writing";
   const pendingCount = story.scenes.filter((s) => s.frames.length === 0).length;
 
@@ -200,13 +211,24 @@ export function SceneTimeline() {
                 <div className="mt-3">
                   <AssetLinkPicker storyId={story.id} scene={scene} types={["environment"]} label="Scene setting" />
                 </div>
+                {(imageQueueInProgress || imageFailed > 0) && (
+                  <p className="mt-2 text-sm text-muted-foreground" aria-live="polite">
+                    {currentStoryItems.length} queued{activeStoryItem ? ` · frame ${activeStoryItem.frameIndex} generating` : ""}{imageFailed > 0 ? ` · ${imageFailed} failed` : ""}
+                  </p>
+                )}
               </div>
-              {scene.frames.length > 0 && (
-                <Button variant="outline" size="sm" onClick={rewrite} disabled={writing} className="shrink-0">
-                  {writing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                  {writing ? "Writing…" : "Rewrite frames"}
+              <div className="flex shrink-0 flex-col items-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => enqueueSceneImages(story.id, scene.id)} disabled={!hasImagesToQueue}>
+                  <Sparkles />
+                  Generate scene images
                 </Button>
-              )}
+                {scene.frames.length > 0 && (
+                  <Button variant="outline" size="sm" onClick={rewrite} disabled={writing || imageWorkInProgress}>
+                    {writing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                    {writing ? "Writing…" : "Rewrite frames"}
+                  </Button>
+                )}
+              </div>
             </header>
 
             {writing && scene.frames.length === 0 ? (

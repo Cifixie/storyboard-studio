@@ -42,8 +42,16 @@ export async function uploadAsset(slot: NewAsset, file: File): Promise<Asset> {
   return (await request<{ asset: Asset }>("/api/assets", { method: "POST", body: form })).asset;
 }
 
-/** Generates a reference image from a bare prompt (no story/frame context). */
-export async function generateReferenceImage(prompt: string): Promise<{ url: string }> {
+export interface ImageGenerationProgress {
+  current: number;
+  total: number;
+}
+
+/** Generates an image and reports each mflux inference step. */
+export async function generateReferenceImage(
+  prompt: string,
+  onProgress?: (progress: ImageGenerationProgress) => void,
+): Promise<{ url: string }> {
   const res = await fetch("/api/image/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -53,7 +61,28 @@ export async function generateReferenceImage(prompt: string): Promise<{ url: str
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error ?? `HTTP ${res.status}`);
   }
-  return res.json();
+  if (!res.body) throw new Error("Image generation returned no progress stream");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+    for (const block of events) {
+      const event = block.match(/^event: (.+)$/m)?.[1];
+      const data = block.match(/^data: (.+)$/m)?.[1];
+      if (!event || !data) continue;
+      const payload = JSON.parse(data);
+      if (event === "progress") onProgress?.(payload as ImageGenerationProgress);
+      if (event === "done") return payload as { url: string };
+      if (event === "error") throw new Error(payload.error ?? "Image generation failed");
+    }
+    if (done) break;
+  }
+  throw new Error("Image generation stream ended without a result");
 }
 
 

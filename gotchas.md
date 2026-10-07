@@ -22,11 +22,10 @@ run, `[inferred]` = best available reasoning, not demonstrated.
   | `mflux-generate-qwen` | `Qwen/Qwen-Image-2512` | ~58 GB pull, 20 files | not needed unless asked |
   | `mflux-generate-qwen-edit` | `Qwen/Qwen-Image-Edit-2509` | ~58 GB | takes `--image-paths` (plural) |
   | `mflux-generate-qwen-2.1 --image ref.png [strength]` | — | — | init-image form; **this** is the asset-embedding path (the repo is warm) |
-- **Spawn cap:** [code] `runSpawn` defaults to 300 s; raise via `config.timeoutSeconds`
-  or `IMAGE_TIMEOUT_SECONDS` in `.env.local`. A cold multi-GB download cannot
-  finish inside 300 s — either raise the cap or pre-warm the cache once by
-  running the binary by hand (HF resumes partial downloads, so nothing is lost
-  except patience).
+- **Image inference can exceed 5 minutes** [code] — four steps took ~4.5 minutes
+  in the user's reported run. `runSpawn` now defaults to a 3600-second timeout;
+  set `IMAGE_TIMEOUT_SECONDS` in `.env.local` to override it. A process killed at
+  timeout reports the configured duration in its error.
 
 ## HuggingFace auth
 

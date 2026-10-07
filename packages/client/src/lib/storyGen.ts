@@ -202,27 +202,18 @@ export function composeImagePrompt(story: Story, frame: Frame, assets: Asset[] =
   const cast = frame.characters
     .map((name) => {
       // Tier 1: frame-level link
+      const storyDescription = story.characters.find((character) => character.name === name)?.description;
       const frameAsset = frame.assetIds
         ?.map((id) => byId.get(id))
-        .find((a) => {
-          if (!a) return false;
-          return a.type === "character" && a.name === name;
-        });
-      if (frameAsset && !seenAsset.has(frameAsset.id)) {
-        seenAsset.add(frameAsset.id);
-        return describe(frameAsset.name, frameAsset.metadata.description, frameAsset.metadata.triggerToken);
-      }
-      // Tier 2: story-level assignment
+        .find((asset) => asset?.type === "character" && asset.name.toLocaleLowerCase() === name.toLocaleLowerCase());
       const storyAssetId = story.characterAssetIds?.[name];
       const storyAsset = storyAssetId ? byId.get(storyAssetId) : undefined;
-      if (storyAsset && !seenAsset.has(storyAsset.id)) {
-        seenAsset.add(storyAsset.id);
-        return describe(name, storyAsset.metadata.description, storyAsset.metadata.triggerToken);
+      const asset = frameAsset ?? storyAsset;
+      if (asset) {
+        if (!seenAsset.has(asset.id)) seenAsset.add(asset.id);
+        return describe(name, storyDescription || asset.metadata.description, asset.metadata.triggerToken);
       }
-      // Tier 3: story description fallback
-      const fallback = story.characters.find((c) => c.name === name);
-      if (fallback) return describe(fallback.name, fallback.description, undefined);
-      return null;
+      return storyDescription ? describe(name, storyDescription, undefined) : null;
     })
     .filter((s): s is string => Boolean(s && s.trim()));
   const castPart = cast.length ? `Characters: ${cast.join(". ")}` : "";
