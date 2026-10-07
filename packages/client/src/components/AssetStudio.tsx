@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useStoryStore } from "@/lib/store/StoryStore";
-import { fetchAssets, createAsset, uploadAsset, removeAsset, triggerTokenFor, suggestAssets, generateReferenceImage, attachAssetImage, type AssetSuggestion, type NewAsset } from "@/lib/assets";
+import { fetchAssets, createAsset, uploadAsset, removeAsset, triggerTokenFor, suggestAllAssets, generateReferenceImage, attachAssetImage, type AssetSuggestion, type NewAsset } from "@/lib/assets";
 import type { Asset, AssetType } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,9 +11,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, ImagePlus, Trash2, FolderOpen, Loader2, Sparkles } from "lucide-react";
+import { Plus, ImagePlus, Trash2, FolderOpen, Loader2, Sparkles, Bolt } from "lucide-react";
 
-const FILTERS: AssetType[] = ["character", "prop", "environment", "reference"];
+const FILTERS: AssetType[] = ["character", "prop", "environment"];
 
 export function AssetStudio() {
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -23,42 +23,91 @@ export function AssetStudio() {
   const [mediaOpen, setMediaOpen] = useState(false);
   const [generatingSuggestion, setGeneratingSuggestion] = useState<string | null>(null);
   const [chipError, setChipError] = useState<Partial<Record<string, string>>>({});
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
+  const bulkAbortRef = useRef(false);
   const story = useStoryStore((s) => s.story);
 
   const refresh = () => fetchAssets().then(setAssets).catch((e) => console.error("Could not load assets", e));
   useEffect(() => { refresh(); }, []);
 
-  const suggestions = suggestAssets(story, assets).filter((s) => s.type === activeFilter);
+  // Show the same uncapped suggestion set that bulk generation will process.
+  const suggestions = suggestAllAssets(story, assets).filter((s) => s.type === activeFilter);
   const visible = assets.filter((a) => a.type === activeFilter);
+  const missing = suggestions.length + visible.filter((a) => !a.filePath).length;
 
-  const generateReference = async (s: AssetSuggestion) => {
-    setGeneratingSuggestion(`${s.type}:${s.name}`);
-    try {
-      // Create the slot first so a failed upload can never orphan the image;
-      // then generate and attach the file to it.
-      const slot = await createAsset({
-        name: s.name,
-        type: s.type,
-        triggerToken: s.triggerToken,
-        description: s.description,
-      });
-      const prompt = [
-        story?.style,
-        `Reference sheet: ${s.description ?? `${s.type} named ${s.name}`}`,
-      ]
-        .filter(Boolean)
-        .join(". ");
-      const { url } = await generateReferenceImage(prompt);
-      const blob = await fetch(url).then((r) => r.blob());
-      await attachAssetImage(slot.id, { name: slot.name, type: slot.type, triggerToken: s.triggerToken, description: s.description }, blob);
-      refresh();
-    } catch (e) {
-      console.error("Reference generation failed", e);
-      setChipError((prev) => ({ ...prev, [`${s.type}:${s.name}`]: e instanceof Error ? e.message : "Generation failed" }));
-      setGeneratingSuggestion(null);
-    }
+  /** Generate an image and attach it to an existing asset slot. */
+  const generateAndAttach = async (s: AssetSuggestion & { id: string }) => {
+    const prompt = [
+      story?.style,
+      `Reference sheet: ${s.description ?? `${s.type} named ${s.name}`}`,
+    ]
+      .filter(Boolean)
+      .join(". ");
+    const { url } = await generateReferenceImage(prompt);
+    const blob = await fetch(url).then((r) => r.blob());
+    return attachAssetImage(s.id, { name: s.name, type: s.type, triggerToken: s.triggerToken, description: s.description }, blob);
   };
 
+  /** Generate all missing images sequentially. */
+  const generateAllMissing = async () => {
+    // Double-start guard
+    if (bulkProgress) return;
+
+    const existingWithoutImages = visible.filter((a) => !a.filePath);
+    if (suggestions.length === 0 && existingWithoutImages.length === 0) return;
+
+    const originalStoryId = story?.id;
+    bulkAbortRef.current = false;
+
+    // Build one queue: [suggestions (new) ..., existing (attach-only) ...]
+    const toSuggestion = (a: Asset): AssetSuggestion => ({
+      name: a.name,
+      type: a.type,
+      description: a.metadata.description,
+      triggerToken: a.metadata.triggerToken ?? triggerTokenFor(a.name),
+      id: a.id,
+    });
+    const queue = [
+      ...suggestions,
+      ...existingWithoutImages.map(toSuggestion),
+    ];
+    const total = queue.length;
+
+    setBulkProgress({ current: 0, total });
+
+    for (let i = 0; i < queue.length; i++) {
+      if (bulkAbortRef.current || useStoryStore.getState().story?.id !== originalStoryId) break;
+      const item = queue[i];
+      const key = `${item.type}:${item.name}`;
+      setGeneratingSuggestion(key);
+      try {
+        if (item.id) {
+          // Existing slot: attach image directly
+          await generateAndAttach({ ...item, id: item.id });
+        } else {
+          // New slot: create + attach
+          const slot = await createAsset({
+            name: item.name,
+            type: item.type,
+            triggerToken: item.triggerToken,
+            description: item.description,
+          });
+          await generateAndAttach({ ...item, id: slot.id });
+        }
+      } catch {
+        setChipError((prev) => ({ ...prev, [key]: "Generation failed" }));
+      } finally {
+        setBulkProgress({ current: i + 1, total });
+        setGeneratingSuggestion(null);
+      }
+    }
+
+    setBulkProgress(null);
+    await refresh();
+  };
+
+
+  const stopBulk = () => { bulkAbortRef.current = true; };
   const openAdd = (slot?: Partial<NewAsset>) => {
     setPrefill(slot ?? {});
     setDialogOpen(true);
@@ -75,11 +124,11 @@ export function AssetStudio() {
       <div className="flex h-14 items-center justify-between border-b border-sidebar-border px-4">
         <h2 className="text-base font-semibold tracking-tight">Assets</h2>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon-sm" className="size-7" onClick={() => setMediaOpen(true)}>
+          <Button variant="ghost" size="icon-sm" className="size-7" disabled={!!bulkProgress} onClick={() => setMediaOpen(true)}>
             <FolderOpen className="size-3.5" />
             <span className="sr-only">Browse media files</span>
           </Button>
-          <Button variant="ghost" size="icon-sm" className="size-7" onClick={() => openAdd({ type: activeFilter })}>
+          <Button variant="ghost" size="icon-sm" className="size-7" disabled={!!bulkProgress} onClick={() => openAdd({ type: activeFilter })}>
             <Plus className="size-3.5" />
             <span className="sr-only">Add asset</span>
           </Button>
@@ -88,6 +137,40 @@ export function AssetStudio() {
 
       <ScrollArea className="flex-1">
         <div className="space-y-3 p-3">
+          {missing > 0 && (
+            <section className="space-y-1.5">
+              <div className="flex items-center justify-between px-0.5">
+                <h3 className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                  <Sparkles className="size-3" />
+                  Missing reference images
+                </h3>
+                <div className="flex items-center gap-2">
+                  {bulkProgress && bulkProgress.current < bulkProgress.total ? (
+                    <Button variant="ghost" size="sm" className="h-6 gap-1 px-2 text-[11px] text-destructive" onClick={stopBulk}>
+                      <Loader2 className="size-3 animate-spin" />
+                      {bulkProgress.current} / {bulkProgress.total}
+                    </Button>
+                  ) : bulkProgress ? (
+                    <span className="text-[11px] text-muted-foreground">{bulkProgress.current} / {bulkProgress.total}</span>
+                  ) : (
+                    <Button variant="outline" size="sm" className="h-6 gap-1 px-2 text-[11px]" onClick={generateAllMissing} disabled={!story}>
+                      <Bolt className="size-3" />
+                      Generate all
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {bulkProgress && (
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all"
+                    style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }}
+                  />
+                </div>
+              )}
+            </section>
+          )}
+
           {suggestions.length > 0 && (
             <section aria-label={`Matching needs from ${story?.title}`} className="space-y-2">
               <h3 className="flex items-center gap-1.5 px-0.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
@@ -103,7 +186,7 @@ export function AssetStudio() {
                     key={key}
                     className="rounded-lg border border-dashed border-border/70 px-2.5 py-2 outline-none transition-colors hover:border-primary/50 hover:bg-accent"
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
                       {busy ? (
                         <Loader2 className="size-4 shrink-0 animate-spin text-primary" strokeWidth={1.5} />
                       ) : (
@@ -115,22 +198,14 @@ export function AssetStudio() {
                           {busy ? "generating reference…" : "needs a reference image"}
                         </span>
                       </span>
-                      <Badge variant="secondary" className="shrink-0 font-mono text-[10px] leading-none">
+                      <Badge variant="secondary" className="min-w-0 max-w-[35%] truncate shrink font-mono text-[10px] leading-none">
                         {s.triggerToken}
                       </Badge>
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-7 shrink-0 px-2 text-[11px]"
-                        disabled={busy}
-                        onClick={() => generateReference(s)}
-                      >
-                        Generate reference
-                      </Button>
-                      <Button
-                        variant="ghost"
                         size="icon-sm"
                         className="size-7 shrink-0"
+                        disabled={!!bulkProgress}
                         onClick={() => openAdd(s)}
                         aria-label={`Add ${s.name} manually`}
                       >
@@ -217,12 +292,18 @@ export function AssetStudio() {
           </button>
         ))}
       </div>
-
       <AddAssetDialog
         open={dialogOpen}
         prefill={prefill}
         onClose={() => setDialogOpen(false)}
         onSaved={() => { setDialogOpen(false); refresh(); }}
+        onGenerateImage={(asset) => generateAndAttach({
+          id: asset.id,
+          name: asset.name,
+          type: asset.type,
+          description: asset.metadata.description,
+          triggerToken: asset.metadata.triggerToken ?? triggerTokenFor(asset.name),
+        })}
       />
       <MediaBrowser open={mediaOpen} onClose={() => setMediaOpen(false)} />
     </div>
@@ -231,17 +312,19 @@ export function AssetStudio() {
 
 // ─── Add / edit asset ────────────────────────────────────────────────────────
 
-function AddAssetDialog({ open, prefill, onClose, onSaved }: {
+function AddAssetDialog({ open, prefill, onClose, onSaved, onGenerateImage }: {
   open: boolean;
   prefill: Partial<NewAsset>;
   onClose: () => void;
   onSaved: (asset: Asset) => void;
+  onGenerateImage: (asset: Asset) => Promise<Asset>;
 }) {
   const [name, setName] = useState("");
   const [type, setType] = useState<AssetType>("character");
   const [token, setToken] = useState("");
   const [description, setDescription] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [createdSlot, setCreatedSlot] = useState<Asset | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -253,7 +336,7 @@ function AddAssetDialog({ open, prefill, onClose, onSaved }: {
     setToken(prefill.triggerToken ?? "");
     setDescription(prefill.description ?? "");
     setFile(null);
-    setError(null);
+    setCreatedSlot(null);
     if (fileRef.current) fileRef.current.value = "";
   }, [open, prefill]);
 
@@ -269,10 +352,37 @@ function AddAssetDialog({ open, prefill, onClose, onSaved }: {
         triggerToken: token.trim() || triggerTokenFor(trimmed),
         description: description.trim() || undefined,
       };
-      const asset = file ? await uploadAsset(slot, file) : await createAsset(slot);
+      const asset = file
+        ? createdSlot
+          ? await attachAssetImage(createdSlot.id, slot, file)
+          : await uploadAsset(slot, file)
+        : createdSlot ?? await createAsset(slot);
+      setCreatedSlot(asset);
       onSaved(asset);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save the asset");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const generateImage = async () => {
+    const trimmed = name.trim() || prefill.name?.trim() || "";
+    if (!trimmed) { setError("Give it a name."); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const slot = createdSlot ?? await createAsset({
+        name: trimmed,
+        type,
+        triggerToken: token.trim() || triggerTokenFor(trimmed),
+        description: description.trim() || undefined,
+      });
+      setCreatedSlot(slot);
+      const generated = await onGenerateImage(slot);
+      onSaved(generated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not generate the image");
     } finally {
       setSaving(false);
     }
@@ -348,10 +458,16 @@ function AddAssetDialog({ open, prefill, onClose, onSaved }: {
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
 
         <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          {!file && (
+            <Button variant="outline" onClick={generateImage} disabled={saving || (!name.trim() && !prefill.name?.trim())}>
+              {saving && <Loader2 className="animate-spin" />}
+              Generate image
+            </Button>
+          )}
           <Button onClick={save} disabled={saving}>
             {saving && <Loader2 className="animate-spin" />}
-            Create asset
+            {file ? "Create asset" : "Create slot"}
           </Button>
         </div>
       </DialogContent>
@@ -385,7 +501,7 @@ function MediaBrowser({ open, onClose }: { open: boolean; onClose: () => void })
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Media files</DialogTitle>
-          <DialogDescription>Everything under public/media — generated frames, audio and references.</DialogDescription>
+          <DialogDescription>Everything under public/media — generated frames, audio, and asset images.</DialogDescription>
         </DialogHeader>
 
         {loading ? (

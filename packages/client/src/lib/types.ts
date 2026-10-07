@@ -77,7 +77,7 @@ export interface Asset {
   createdAt: string;
 }
 
-export const ASSET_TYPES = ["character", "prop", "environment", "reference"] as const;
+export const ASSET_TYPES = ["character", "prop", "environment"] as const;
 export type AssetType = (typeof ASSET_TYPES)[number];
 
 export interface AssetMetadata {

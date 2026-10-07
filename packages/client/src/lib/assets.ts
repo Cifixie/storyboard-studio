@@ -62,7 +62,7 @@ export async function attachAssetImage(id: string, slot: Partial<NewAsset>, blob
   const form = new FormData();
   form.set("id", id);
   if (slot.name) form.set("name", slot.name);
-  form.set("type", slot.type ?? "reference");
+  if (slot.type) form.set("type", slot.type);
   if (slot.triggerToken) form.set("triggerToken", slot.triggerToken);
   if (slot.description) form.set("description", slot.description);
   form.set("file", blob instanceof File ? blob : new File([blob], "reference.png", { type: "image/png" }));
@@ -80,6 +80,8 @@ export interface AssetSuggestion {
   type: AssetType;
   description?: string;
   triggerToken: string;
+  /** Existing asset id (for attaching images to pre-existing slots). */
+  id?: string;
 }
 
 /** `Barnaby` → `BARNABY`, `Lighthouse cellar` → `LIGHTHOUSE_CELLAR` */
@@ -93,7 +95,7 @@ export const keyOf = (name: string) => name.trim().toLowerCase().replace(/[.!,;:
  * every cast member, plus every named place — sets images must keep redrawing each other
  * even when a place appears once. Reused places sort first. Pure text, re-run on every edit.
  */
-export function suggestAssets(story: Story | null, assets: Asset[]): AssetSuggestion[] {
+export function suggestAssets(story: Story | null, assets: Asset[], capPerType = 4): AssetSuggestion[] {
   if (!story) return [];
 
   const suggestions: AssetSuggestion[] = [];
@@ -136,8 +138,12 @@ export function suggestAssets(story: Story | null, assets: Asset[]): AssetSugges
     suggestions.push({ name, type: "environment", triggerToken: triggerTokenFor(name) });
   }
 
-  // An 8-character cast would otherwise crowd every environment out of the list.
-  return suggestions.filter((s) => s.type === "character").slice(0, 4)
-    .concat(suggestions.filter((s) => s.type === "prop").slice(0, 4))
-    .concat(suggestions.filter((s) => s.type === "environment").slice(0, 4));
+  if (capPerType === Infinity) return suggestions;
+  return suggestions.filter((s) => s.type === "character").slice(0, capPerType)
+    .concat(suggestions.filter((s) => s.type === "prop").slice(0, capPerType))
+    .concat(suggestions.filter((s) => s.type === "environment").slice(0, capPerType));
+}
+
+export function suggestAllAssets(story: Story | null, assets: Asset[]): AssetSuggestion[] {
+  return suggestAssets(story, assets, Infinity);
 }

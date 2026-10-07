@@ -11,7 +11,6 @@ const FOLDERS: Record<AssetType, string> = {
   character: "characters",
   prop: "props",
   environment: "environments",
-  reference: "references",
 };
 
 function badAssetType(type: string): boolean {
