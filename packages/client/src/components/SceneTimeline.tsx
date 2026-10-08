@@ -51,15 +51,14 @@ export function SceneTimeline() {
 
   const work = sceneWork[scene.id];
   const currentStoryItems = imageQueue.pending.filter((item) => item.storyId === story.id);
-  const activeStoryItem = imageQueue.active?.storyId === story.id ? imageQueue.active : null;
+  const activeStoryItems = imageQueue.active?.storyId === story.id ? [imageQueue.active] : [];
   const currentSceneItems = currentStoryItems.filter((item) => item.sceneId === scene.id);
-  const activeSceneItem = activeStoryItem?.sceneId === scene.id ? activeStoryItem : null;
-  const queuedFrameIds = new Set(currentStoryItems.map((item) => item.frameId));
-  if (activeStoryItem) queuedFrameIds.add(activeStoryItem.frameId);
+  const activeSceneItems = activeStoryItems.filter((item) => item.sceneId === scene.id);
+  const queuedFrameIds = new Set([...currentStoryItems, ...activeStoryItems].map((item) => item.frameId));
   const hasImagesToQueue = scene.frames.some((frame) => !frame.imageUrl && frame.prompt.trim() && !queuedFrameIds.has(frame.id));
-  const imageWorkInProgress = currentSceneItems.length > 0 || activeSceneItem !== null;
-  const imageQueueInProgress = currentStoryItems.length > 0 || activeStoryItem !== null;
-  const imageFailed = imageQueueInProgress || imageQueue.failed > 0 && imageQueue.pending.length === 0 && !imageQueue.active ? imageQueue.failed : 0;
+  const imageWorkInProgress = imageQueue.pending.some((item) => item.storyId === story.id && item.sceneId === scene.id) || imageQueue.active?.storyId === story.id && imageQueue.active.sceneId === scene.id;
+  const imageQueueInProgress = currentStoryItems.length > 0 || activeStoryItems.length > 0;
+  const imageFailed = imageQueue.failed;
   const writing = work?.state === "writing";
   const pendingCount = story.scenes.filter((s) => s.frames.length === 0).length;
 
@@ -213,7 +212,7 @@ export function SceneTimeline() {
                 </div>
                 {(imageQueueInProgress || imageFailed > 0) && (
                   <p className="mt-2 text-sm text-muted-foreground" aria-live="polite">
-                    {currentStoryItems.length} queued{activeStoryItem ? ` · frame ${activeStoryItem.frameIndex} generating` : ""}{imageFailed > 0 ? ` · ${imageFailed} failed` : ""}
+                    {currentSceneItems.length} queued{activeSceneItems.length ? ` · frame ${activeSceneItems[0].frameIndex} generating` : ""}{imageFailed > 0 ? ` · ${imageFailed} failed` : ""}
                   </p>
                 )}
               </div>

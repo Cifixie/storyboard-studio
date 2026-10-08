@@ -84,7 +84,7 @@ export function FrameCard({ storyId, frame, scene, isActive, onUpdated }: FrameC
           </span>
         </div>
         <div className="flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
             <span className={`size-1.5 rounded-full ${status.dot}`} />
             {status.label}
           </span>
@@ -108,7 +108,12 @@ export function FrameCard({ storyId, frame, scene, isActive, onUpdated }: FrameC
 
         <div className="flex items-center gap-2">
           {frame.audioUrl ? (
-            <audio controls src={frame.audioUrl} className="h-8 w-full max-w-sm" />
+            <>
+              <audio controls preload="none" src={frame.audioUrl.replace(/\.wav$/i, (extension, offset, path) => path.slice(0, offset).endsWith("_000") ? extension : "_000.wav")} className="h-8 w-full max-w-sm" />
+              <Button variant="ghost" size="sm" onClick={handleGenerateAudio} disabled={audioGenerating || !frame.narration} aria-label="Regenerate voiceover">
+                {audioGenerating ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              </Button>
+            </>
           ) : (
             <Button variant="secondary" size="sm" onClick={handleGenerateAudio} disabled={audioGenerating || !frame.narration}>
               {audioGenerating ? <Loader2 className="animate-spin" /> : <Mic />}

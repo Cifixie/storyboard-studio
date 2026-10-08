@@ -43,8 +43,8 @@ const configSchema = z.object({
   // ─── TTS (mlx_audio CLI) ───────────────────────────────────────────────
   tts: z.object({
     mediaDir: z.string().default("./public/media"),
-    model: z.string().default("qwen3-tts"),
-    defaultVoice: z.string().default("Vivian"),
+    model: z.string().default("mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-bf16"),
+    defaultVoice: z.string().default("Ryan"),
   }).default({}),
 });
 
@@ -74,8 +74,8 @@ function getConfig(): Config {
     },
     tts: {
       mediaDir: process.env.TTS_MEDIA_DIR ?? "./public/media",
-      model: process.env.TTS_MODEL ?? "qwen3-tts",
-      defaultVoice: process.env.TTS_VOICE ?? "Vivian",
+      model: process.env.TTS_MODEL ?? "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-bf16",
+      defaultVoice: process.env.TTS_VOICE ?? "Ryan",
     },
   };
 
@@ -120,7 +120,8 @@ class LocalTTSProvider implements AudioProvider {
     this.ensureDir();
 
     const id = crypto.randomUUID().slice(0, 8);
-    const outputName = `audio-${id}.wav`;
+    // mlx-audio appends a zero-based segment suffix, including for one-frame output.
+    const outputName = `audio-${id}_000.wav`;
     const outputDir = this.mediaDir;
     const prefix = `audio-${id}`;
 

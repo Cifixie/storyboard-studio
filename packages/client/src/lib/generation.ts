@@ -3,67 +3,55 @@ import { createElement } from "react";
 
 import { toast } from "@/components/ui/toast";
 import { generateFrameImage, writeSceneFrames } from "@/lib/api";
-import type { ImageQueueItem } from "@/lib/store/StoryStore";
-import { useStoryStore } from "@/lib/store/StoryStore";
+import { type ImageQueueItem, useStoryStore } from "@/lib/store/StoryStore";
 
 const store = () => useStoryStore.getState();
 let draining = false;
-let queueToastId: string | null = null;
-let queueToastStoryId: string | null = null;
-let observedStoryId = store().story?.id ?? null;
+let queueToast: { id: string; storyId: string; title: string } | null = null;
 
-function queueDescription(storyId: string) {
-  const { imageQueue, story } = store();
-  const active = imageQueue.active?.storyId === storyId ? imageQueue.active : null;
-  const waiting = imageQueue.pending.filter((item) => item.storyId === storyId).length;
-  const queuedLine = active ? `Frame ${active.frameIndex} generating · ${waiting} queued` : `${waiting} queued`;
-  const counts = story?.id === storyId ? imageQueue : { ...imageQueue, completed: 0, failed: 0, lastError: null };
-  return createElement(
+function updateQueueToast(progress?: { current: number; total: number; frameIndex: number }): void {
+  const currentStoryId = store().story?.id;
+  if (!queueToast || currentStoryId !== queueToast.storyId) return;
+  const { imageQueue } = store();
+  const active = imageQueue.active?.storyId === currentStoryId ? imageQueue.active : null;
+  const waiting = imageQueue.pending.filter((item) => item.storyId === currentStoryId);
+  const description = createElement(
     "div",
     { className: "space-y-1" },
-    createElement("p", null, queuedLine),
-    createElement("p", null, `${counts.completed} completed · ${counts.failed} failed`),
-    counts.lastError && createElement("p", { role: "alert", className: "text-destructive" }, counts.lastError),
+    createElement("p", null, `${waiting.length} queued${active ? ` · frame ${active.frameIndex} generating` : ""}${progress && active ? ` · step ${progress.current} of ${progress.total}` : ""}`),
+    createElement("p", null, `${imageQueue.completed} completed · ${imageQueue.failed} failed`),
+    imageQueue.lastError && createElement("p", { role: "alert", className: "text-destructive" }, imageQueue.lastError),
   );
-}
-
-function updateQueueToast(storyId: string, terminal = false) {
-  if (store().story?.id !== storyId || queueToastStoryId !== storyId || !queueToastId) return;
-  const { imageQueue } = store();
-  const hasJobs = imageQueue.active?.storyId === storyId || imageQueue.pending.some((item) => item.storyId === storyId);
-  if (terminal || !hasJobs) {
-    const failed = imageQueue.failed;
-    toast.update(queueToastId, failed
-      ? { type: "error", title: `${failed} image${failed === 1 ? "" : "s"} failed`, description: queueDescription(storyId), timeout: 0 }
-      : { type: "success", title: "Images generated", description: queueDescription(storyId), timeout: 4500 });
-    queueToastId = null;
-    queueToastStoryId = null;
+  if (!active && waiting.length === 0) {
+    toast.update(queueToast.id, imageQueue.failed
+      ? { type: "error", title: `${imageQueue.failed} image${imageQueue.failed === 1 ? "" : "s"} failed`, description, timeout: 0 }
+      : { type: "success", title: "Images generated", description, timeout: 4500 });
+    queueToast = null;
     return;
   }
-  toast.update(queueToastId, { type: "loading", title: "Generating images", description: queueDescription(storyId), timeout: 0 });
+  toast.update(queueToast.id, { type: "loading", title: queueToast.title, description, timeout: 0 });
 }
 
-function ensureQueueToast(storyId: string) {
+function ensureQueueToast(storyId: string): void {
   if (store().story?.id !== storyId) return;
-  if (queueToastId && queueToastStoryId !== storyId) {
-    toast.close(queueToastId);
-    queueToastId = null;
-    queueToastStoryId = null;
+  if (queueToast && queueToast.storyId !== storyId) {
+    toast.close(queueToast.id);
+    queueToast = null;
   }
-  if (!queueToastId) {
-    queueToastStoryId = storyId;
-    queueToastId = toast.add({ type: "loading", title: "Generating images", description: queueDescription(storyId), timeout: 0 });
+  if (!queueToast) {
+    queueToast = {
+      id: toast.add({ type: "loading", title: "Generating images", description: "Queued", timeout: 0 }),
+      storyId,
+      title: "Generating images",
+    };
   }
-  updateQueueToast(storyId);
+  updateQueueToast();
 }
+
 useStoryStore.subscribe((state, previous) => {
-  const previousStoryId = previous.story?.id ?? null;
-  const storyId = state.story?.id ?? null;
-  if (storyId === previousStoryId) return;
-  if (queueToastId && queueToastStoryId === previousStoryId) toast.close(queueToastId);
-  if (queueToastStoryId === previousStoryId) {
-    queueToastId = null;
-    queueToastStoryId = null;
+  if (state.story?.id !== previous.story?.id && queueToast && queueToast.storyId !== state.story?.id) {
+    toast.close(queueToast.id);
+    queueToast = null;
   }
 });
 
@@ -76,98 +64,80 @@ function frameJob(storyId: string, sceneId: string, frameId: string, onlyIfMissi
   return { storyId, sceneId, frameId, frameIndex: frame.frameIndex, prompt: frame.prompt, onlyIfMissing };
 }
 
+function enqueueImages(items: ImageQueueItem[], storyId: string): void {
+  if (items.length === 0 || store().story?.id !== storyId) return;
+  store().enqueueImages(items);
+  const { imageQueue } = store();
+  if (!imageQueue.pending.some((item) => item.storyId === storyId) && imageQueue.active?.storyId !== storyId) return;
+  ensureQueueToast(storyId);
+  scheduleImageWorker();
+}
+
 export function enqueueFrameImage(storyId: string, frameId: string): void {
   const story = store().story;
   if (!story || story.id !== storyId) return;
   const scene = story.scenes.find((candidate) => candidate.frames.some((frame) => frame.id === frameId));
   const item = scene && frameJob(storyId, scene.id, frameId, false);
-  if (!item) return;
-  store().enqueueImages([item]);
-  const queue = store().imageQueue;
-  if (queue.pending.some((job) => job.storyId === storyId && job.frameId === frameId) || (queue.active?.storyId === storyId && queue.active.frameId === frameId)) {
-    ensureQueueToast(storyId);
-    drainImageQueue();
-  }
+  if (item) enqueueImages([item], storyId);
 }
 
 export function enqueueSceneImages(storyId: string, sceneId: string): void {
   const story = store().story;
-  if (!story || story.id !== storyId) return;
-  const scene = story.scenes.find((candidate) => candidate.id === sceneId);
+  const scene = story?.id === storyId ? story.scenes.find((candidate) => candidate.id === sceneId) : null;
   if (!scene) return;
   const items = scene.frames.flatMap((frame) => {
     const item = frameJob(storyId, sceneId, frame.id, true);
     return item ? [item] : [];
   });
-  if (items.length === 0) return;
-  store().enqueueImages(items);
-  const queue = store().imageQueue;
-  if (queue.pending.some((job) => job.storyId === storyId) || queue.active?.storyId === storyId) {
-    ensureQueueToast(storyId);
-    drainImageQueue();
-  }
+  enqueueImages(items, storyId);
 }
 
 function isCurrentFrame(item: ImageQueueItem): boolean {
   const story = store().story;
   return story?.id === item.storyId && story.scenes.some((scene) =>
-    scene.id === item.sceneId && scene.frames.some((frame) => frame.id === item.frameId),
+    scene.id === item.sceneId && scene.frames.some((frame) => frame.id === item.frameId && frame.prompt === item.prompt),
   );
 }
 
-async function drainImageQueue() {
+async function runImageJob(item: ImageQueueItem): Promise<void> {
+  const frame = frameJob(item.storyId, item.sceneId, item.frameId, item.onlyIfMissing);
+  if (!frame || frame.prompt !== item.prompt) {
+    store().finishImage(item, "skipped");
+    if (store().story?.id === item.storyId) updateQueueToast();
+    return;
+  }
+
+  try {
+    const saved = await generateFrameImage(item.storyId, item.frameId, (progress) => {
+      if (isCurrentFrame(item)) updateQueueToast({ ...progress, frameIndex: item.frameIndex });
+    });
+    if (saved.id === item.frameId && isCurrentFrame(item)) store().replaceFrame(saved);
+    store().finishImage(item, "success");
+  } catch (error) {
+    store().finishImage(item, "failure", error instanceof Error ? error.message : "Image generation failed");
+  }
+  if (store().story?.id === item.storyId) updateQueueToast();
+}
+
+async function drainImageQueue(): Promise<void> {
   if (draining) return;
   draining = true;
   try {
     while (true) {
       const item = store().startNextImage();
       if (!item) break;
-      updateQueueToast(item.storyId);
-
-      const frame = frameJob(item.storyId, item.sceneId, item.frameId, item.onlyIfMissing);
-      if (!frame || frame.prompt !== item.prompt) {
-        store().finishImage(item, "skipped");
-        updateQueueToast(item.storyId);
-        continue;
-      }
-
-      try {
-        const saved = await generateFrameImage(item.storyId, item.frameId, (progress) => {
-          if (store().story?.id === item.storyId && queueToastStoryId === item.storyId && queueToastId && isCurrentFrame(item)) {
-            const queuedLine = `Frame ${item.frameIndex} generating · ${store().imageQueue.pending.filter((job) => job.storyId === item.storyId).length} queued`;
-            toast.update(queueToastId, {
-              type: "loading",
-              title: "Generating images",
-              description: createElement(
-                "div",
-                { className: "space-y-1" },
-                createElement("p", null, queuedLine),
-                createElement("p", null, `Image step ${progress.current} of ${progress.total}`),
-                queueDescription(item.storyId),
-              ),
-              timeout: 0,
-            });
-          }
-        });
-        if (saved.id === item.frameId && isCurrentFrame(item)) store().replaceFrame(saved);
-        store().finishImage(item, "success");
-      } catch (error) {
-        store().finishImage(item, "failure", error instanceof Error ? error.message : "Image generation failed");
-      }
-      updateQueueToast(item.storyId);
+      updateQueueToast();
+      await runImageJob(item);
     }
   } finally {
     draining = false;
-    const { imageQueue, story } = store();
-    if (story && (imageQueue.pending.some((item) => item.storyId === story.id) || imageQueue.active?.storyId === story.id)) {
-      ensureQueueToast(story.id);
-      if (!imageQueue.active) drainImageQueue();
-    } else if (story && imageQueue.failed > 0 && !imageQueue.active && imageQueue.pending.length === 0) {
-      updateQueueToast(story.id, true);
-    }
+    if (store().imageQueue.pending.length > 0 && !store().imageQueue.active) queueMicrotask(scheduleImageWorker);
   }
 }
 
+function scheduleImageWorker(): void {
+  if (!draining) void drainImageQueue();
+}
 /** Writes the frames of one scene. Returns false if it failed; the reason is kept on the scene. */
 export async function writeScene(sceneId: string): Promise<boolean> {
   const story = store().story;

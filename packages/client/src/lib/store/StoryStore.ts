@@ -21,6 +21,7 @@ export interface ImageQueueState {
   lastError: string | null;
 }
 
+
 interface StoryState {
   story: Story | null;
   activeSceneIndex: number;
@@ -39,14 +40,15 @@ interface StoryState {
   /** Takes a newer saved copy of the open story and keeps the current scene. */
   applyStory: (story: Story) => void;
   replaceFrame: (frame: Frame) => void;
+  enqueueImages: (items: ImageQueueItem[]) => void;
+  startNextImage: () => ImageQueueItem | null;
+  finishImage: (item: ImageQueueItem, outcome: "success" | "failure" | "skipped", error?: string) => void;
   setActiveScene: (index: number) => void;
   setActiveFrame: (index: number) => void;
   setSceneWork: (sceneId: string, work: SceneWork | null) => void;
   setWriteAll: (progress: StoryState["writeAll"]) => void;
-  enqueueImages: (items: ImageQueueItem[]) => void;
-  startNextImage: () => ImageQueueItem | null;
-  finishImage: (item: ImageQueueItem, outcome: "success" | "failure" | "skipped", error?: string) => void;
 }
+
 export const EMPTY_IMAGE_QUEUE: ImageQueueState = {
   pending: [],
   active: null,
@@ -107,7 +109,9 @@ export const useStoryStore = create<StoryState>((set) => ({
 
   enqueueImages: (items) =>
     set((state) => {
-      if (!state.story || items.length === 0) return state;
+      if (items.length === 0) return state;
+      const storyId = state.story?.id;
+      if (!storyId) return state;
       const { imageQueue } = state;
       const known = new Set([
         ...(imageQueue.active ? [`${imageQueue.active.storyId}:${imageQueue.active.frameId}`] : []),
@@ -115,17 +119,17 @@ export const useStoryStore = create<StoryState>((set) => ({
       ]);
       const additions = items.filter((item) => {
         const key = `${item.storyId}:${item.frameId}`;
-        if (item.storyId !== state.story?.id || known.has(key)) return false;
+        if (item.storyId !== storyId || known.has(key)) return false;
         known.add(key);
         return true;
       });
       if (additions.length === 0) return state;
-      const newBatch = imageQueue.active === null && imageQueue.pending.length === 0;
+      const hasCurrentStoryWork = imageQueue.active?.storyId === storyId || imageQueue.pending.some((item) => item.storyId === storyId);
       return {
         imageQueue: {
           ...imageQueue,
           pending: [...imageQueue.pending, ...additions],
-          ...(newBatch ? { completed: 0, failed: 0, lastError: null } : {}),
+          ...(!hasCurrentStoryWork ? { completed: 0, failed: 0, lastError: null } : {}),
         },
       };
     }),
@@ -133,10 +137,11 @@ export const useStoryStore = create<StoryState>((set) => ({
   startNextImage: () => {
     let item: ImageQueueItem | null = null;
     set((state) => {
-      if (state.imageQueue.active || state.imageQueue.pending.length === 0) return state;
-      item = state.imageQueue.pending[0];
+      const { imageQueue } = state;
+      if (imageQueue.active || imageQueue.pending.length === 0) return state;
+      item = imageQueue.pending[0];
       return {
-        imageQueue: { ...state.imageQueue, pending: state.imageQueue.pending.slice(1), active: item },
+        imageQueue: { ...imageQueue, pending: imageQueue.pending.slice(1), active: item },
       };
     });
     return item;
@@ -158,5 +163,7 @@ export const useStoryStore = create<StoryState>((set) => ({
         },
       };
     }),
+
+
 }));
 
