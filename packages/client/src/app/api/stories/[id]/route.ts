@@ -15,16 +15,8 @@ export async function GET(_req: NextRequest, { params }: Context) {
 }
 
 /**
- * Two mutation modes on one route:
- *
- * **Asset links** (scene / frame): body carries `sceneId` (and optionally
- * `frameId`) plus `assetIds`.  Assets not in the library are dropped so a
- * deleted asset cannot leave a dangling link behind.
- *
- * **Character assignment**: body carries `characterName` and optionally
- * `characterAssetId`.  When `characterAssetId` is present (even `null`) the
- * story-level mapping is updated — `null` clears the assignment for that
- * character.
+ * PATCH supports frame text edits, asset links, and story character assignments.
+ * DELETE removes one frame when a frameId is provided; otherwise it deletes the story.
  */
 export async function PATCH(req: NextRequest, { params }: Context) {
   const { id } = await params;
@@ -35,6 +27,7 @@ export async function PATCH(req: NextRequest, { params }: Context) {
       assetIds?: unknown;
       characterName?: string;
       characterAssetId?: string | null;
+      frameEdits?: { prompt?: unknown; description?: unknown; narration?: unknown };
     };
 
     // Character assignment path
@@ -55,7 +48,66 @@ export async function PATCH(req: NextRequest, { params }: Context) {
       return NextResponse.json({ story });
     }
 
+    // Frame text edit path
+    if (typeof body.frameId === "string" && body.frameEdits) {
+      const edits = body.frameEdits;
+      if (
+        (edits.prompt !== undefined && typeof edits.prompt !== "string") ||
+        (edits.description !== undefined && typeof edits.description !== "string") ||
+        (edits.narration !== undefined && typeof edits.narration !== "string")
+      ) {
+        return NextResponse.json({ error: "Invalid frame edits" }, { status: 400 });
+      }
+
+      const mediaToRemove: string[] = [];
+      const story = mutateStory(id, (s) => {
+        let frame: Frame | undefined;
+        for (const scene of s.scenes) {
+          frame = scene.frames.find((candidate) => candidate.id === body.frameId);
+          if (frame) break;
+        }
+        if (!frame) throw new NotFoundError("Frame not found");
+
+        const imageChanged =
+          (edits.prompt !== undefined && edits.prompt !== frame.prompt) ||
+          (edits.description !== undefined && edits.description !== frame.description);
+        const narrationChanged = edits.narration !== undefined && edits.narration !== frame.narration;
+
+        if (edits.prompt !== undefined) frame.prompt = edits.prompt as string;
+        if (edits.description !== undefined) frame.description = edits.description as string;
+        if (edits.narration !== undefined) frame.narration = edits.narration as string;
+
+        if (imageChanged) {
+          if (frame.imageUrl) mediaToRemove.push(frame.imageUrl);
+          frame.imageUrl = null;
+          delete frame.metadata.imageWidth;
+          delete frame.metadata.imageHeight;
+          delete frame.metadata.seed;
+          delete frame.metadata.model;
+          frame.status = "draft";
+        }
+        if (narrationChanged) {
+          if (frame.audioUrl) mediaToRemove.push(frame.audioUrl);
+          frame.audioUrl = null;
+          delete frame.metadata.audioDuration;
+          delete frame.metadata.voice;
+        }
+        if (imageChanged || narrationChanged) frame.error = null;
+        frame.updatedAt = new Date().toISOString();
+        return s;
+      });
+      for (const path of mediaToRemove) {
+        try {
+          media.remove(path.replace(/^\/media\//, ""));
+        } catch (error) {
+          console.error("Frame edited but generated media could not be removed:", path, error);
+        }
+      }
+      return NextResponse.json({ story });
+    }
+
     // Asset-link path (scene / frame)
+
     if (typeof body.sceneId !== "string" || !Array.isArray(body.assetIds)) {
       return NextResponse.json({ error: "sceneId and assetIds are required" }, { status: 400 });
     }
@@ -87,20 +139,53 @@ export async function PATCH(req: NextRequest, { params }: Context) {
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: Context) {
+export async function DELETE(req: NextRequest, { params }: Context) {
   const { id } = await params;
+  const url = new URL(req.url);
+  const hasFrameId = url.searchParams.has("frameId");
+  const frameId = url.searchParams.get("frameId");
+  if (hasFrameId && !frameId) return NextResponse.json({ error: "frameId is required" }, { status: 400 });
+
+  if (typeof frameId === "string" && frameId) {
+    const mediaToRemove: string[] = [];
+    try {
+      const story = mutateStory(id, (s) => {
+        for (const scene of s.scenes) {
+          const index = scene.frames.findIndex((frame) => frame.id === frameId);
+          if (index < 0) continue;
+          const [frame] = scene.frames.splice(index, 1);
+          if (frame.imageUrl) mediaToRemove.push(frame.imageUrl);
+          if (frame.audioUrl) mediaToRemove.push(frame.audioUrl);
+          return s;
+        }
+        throw new NotFoundError("Frame not found");
+      });
+      for (const path of mediaToRemove) {
+        try {
+          media.remove(path.replace(/^\/media\//, ""));
+        } catch (error) {
+          console.error("Frame removed but generated media could not be removed:", path, error);
+        }
+      }
+      return NextResponse.json({ story });
+    } catch (error) {
+      if (error instanceof NotFoundError) return NextResponse.json({ error: error.message }, { status: 404 });
+      console.error("Removing frame failed:", error);
+      return NextResponse.json({ error: "Could not remove frame" }, { status: 500 });
+    }
+  }
+
   const story = getStory(id);
   if (!story) return NextResponse.json({ error: "Story not found" }, { status: 404 });
   if (!deleteStory(id)) return NextResponse.json({ error: "Story not found" }, { status: 404 });
-  // The media files belong to this story alone; nothing else reclaims them.
   const files = story.scenes.flatMap((scene): string[] =>
-    scene.frames.flatMap((frame: Frame) => [frame.imageUrl, frame.audioUrl].filter((p): p is string => Boolean(p)))
+    scene.frames.flatMap((frame: Frame) => [frame.imageUrl, frame.audioUrl].filter((path): path is string => Boolean(path)))
   );
   for (const path of files) {
     try {
       media.remove(path.replace(/^\/media\//, ""));
-    } catch (e) {
-      console.error("Story deleted but a media file could not be removed:", path, e);
+    } catch (error) {
+      console.error("Story deleted but a media file could not be removed:", path, error);
     }
   }
   return NextResponse.json({ ok: true });

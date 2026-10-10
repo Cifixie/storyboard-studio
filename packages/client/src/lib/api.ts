@@ -39,6 +39,38 @@ export async function linkAssets(storyId: string, sceneId: string, assetIds: str
   })).story;
 }
 
+/** Saves edited frame text and returns the updated story. */
+export async function editFrame(
+  storyId: string,
+  frameId: string,
+  frameEdits: { prompt: string; description: string; narration: string },
+): Promise<Story> {
+  return (await request<{ story: Story }>(`/api/stories/${storyId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ frameId, frameEdits }),
+  })).story;
+}
+/** Creates a frame in a scene and returns the updated story. */
+export async function createFrame(
+  storyId: string,
+  sceneId: string,
+  frame: { prompt: string; description: string; narration: string; shotType: string | null; characters: string[] },
+): Promise<Story> {
+  return (await request<{ story: Story }>(`/api/stories/${storyId}/scenes/${sceneId}/frames`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(frame),
+  })).story;
+}
+
+/** Removes one frame and returns the updated story. */
+export async function removeFrame(storyId: string, frameId: string): Promise<Story> {
+  return (await request<{ story: Story }>(`/api/stories/${storyId}?frameId=${encodeURIComponent(frameId)}`, {
+    method: "DELETE",
+  })).story;
+}
+
 export interface FrameImageProgress {
   current: number;
   total: number;

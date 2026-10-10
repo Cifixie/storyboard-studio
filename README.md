@@ -1,11 +1,10 @@
 # Storyboard Studio
 
-Turn a one-line premise into an illustrated, narrated children's storyboard. A local LLM plans the story and writes it scene by scene, a diffusion model draws each frame, and a TTS model reads the narration. Everything is editable on a scene and frame timeline.
+Turn a one-line premise into an illustrated, narrated children's storyboard. A language model plans the story and writes it scene by scene, a diffusion model draws each frame, and a text-to-speech model reads the narration. Edit stories on a scene and frame timeline, then read them in the built-in player.
 
-Built with Next.js, TypeScript and SQLite. The models run locally on Apple Silicon, so there are no per-call costs and nothing leaves your machine.
+Built with Next.js, TypeScript, and SQLite. Image and voice generation use local MLX tools on Apple Silicon. Story planning and writing can use a local OpenAI-compatible endpoint or an optional hosted LLM. Prompts sent to a hosted endpoint leave your machine and may incur provider charges.
 
-<!-- Add a screenshot or GIF of the timeline editor here:
-![Storyboard Studio](docs/screenshot.png) -->
+<!-- Add a screenshot or GIF of the editor here once a redistributable image is available. -->
 
 ## How it works
 
@@ -24,9 +23,10 @@ Details worth knowing:
 
 - macOS on Apple Silicon (the image and voice tools are MLX-based)
 - Node.js 20+ and [pnpm](https://pnpm.io)
-- An OpenAI-compatible chat endpoint for the LLM. A local MLX server (the defaults assume one on port 8000) works, as does any hosted OpenAI-compatible API.
-- [`mflux`](https://github.com/filipstrand/mflux) on your `PATH`, providing `mflux-generate-qwen-2.1`, `mflux-generate-qwen` and `mflux-generate-qwen-edit` (image generation; `…-2.1` is the default)
-- [`mlx-audio`](https://github.com/Blaizzy/mlx-audio) on your `PATH`, providing `mlx_audio.tts.generate` (narration)
+- An OpenAI-compatible chat endpoint for the LLM. The default local endpoint listens on port 8000; hosted OpenAI-compatible APIs are optional.
+- [`mflux`](https://github.com/filipstrand/mflux) on your `PATH`, providing `mflux-generate-qwen-2.1`, `mflux-generate-qwen`, and `mflux-generate-qwen-edit` (image generation; `…-2.1` is the default).
+- [`mlx-audio`](https://github.com/Blaizzy/mlx-audio) on your `PATH`, providing `mlx_audio.tts.generate` (narration).
+- The workspace allows the `better-sqlite3` native build. If installation fails because `node-gyp` is unavailable, install the Xcode Command Line Tools and ensure pnpm can resolve `node-gyp` in its build environment before retrying.
 
 The image and voice commands are started by name, so they must be on the `PATH` of the shell that runs the dev server. If you installed them in a virtualenv, activate it first.
 
@@ -35,14 +35,11 @@ The image and voice commands are started by name, so they must be on the `PATH` 
 ```bash
 pnpm install
 cp packages/client/.env.example packages/client/.env.local   # then edit
-pnpm dev                                                      # http://localhost:3000
+pnpm dev              # http://localhost:3000
 ```
 
-If `better-sqlite3` fails to load, make sure pnpm is allowed to run its build script (`pnpm approve-builds`, or check `allowBuilds` in `pnpm-workspace.yaml`).
-
-### Configuration
-
-All settings are environment variables, listed with their defaults in [`packages/client/.env.example`](packages/client/.env.example).
+## Configuration
+Environment variable defaults are documented in [`packages/client/.env.example`](packages/client/.env.example).
 
 | Variable | Purpose |
 | --- | --- |
@@ -62,20 +59,21 @@ All settings are environment variables, listed with their defaults in [`packages
 
 ```
 packages/
-  client/            Next.js 15 app (App Router): UI, API routes, SQLite
-    src/app/api/     stories, frames, image and TTS generation, assets, media
-    src/components/  story editor, scene timeline, frame cards, asset studio
-    src/lib/         LLM client, story generation, prompt composition,
-                     normalisation, Zustand store, database
+  client/                Next.js app: UI, API routes, SQLite
+    src/app/api/         stories, frames, image/TTS generation, assets, media
+    src/app/play/        story reader/player
+    src/components/      story editor, scene timeline, frame cards, asset studio
+    src/lib/             LLM client, story generation, prompt composition,
+                         normalisation, Zustand store, database
 ```
 
 ## Status
 
-A working prototype. Not done yet:
+The app supports story planning and writing, image and narration generation, manual editing, asset linking, and a reader/player. Current limitations:
+- Image and voice generation require local MLX tools on Apple Silicon; only the LLM can use a hosted provider.
+- Narration duration is not detected automatically.
+- Automated tests are not configured; `pnpm typecheck` checks TypeScript types.
 
-- Cloud providers for image and voice (only the LLM can use a hosted API today)
-- The interactive reader/player (synced narration, text and images)
-- Audio duration detection
-- Automated tests
+## License
 
-The original design notes are in [`storyboard_studio_architecture_blueprint.md`](storyboard_studio_architecture_blueprint.md).
+No license has been selected. Until one is added, the source remains under its default copyright; public visibility alone does not grant permission to reuse, modify, or redistribute it.

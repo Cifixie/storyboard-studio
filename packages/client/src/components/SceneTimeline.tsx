@@ -1,21 +1,33 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useStoryStore } from "@/lib/store/StoryStore";
 import { enqueueSceneImages, stopWriteAll, writeAllScenes, writeScene } from "@/lib/generation";
 import { fetchAssets } from "@/lib/assets";
-import { assignCharacterAsset } from "@/lib/api";
-import { type Asset } from "@/lib/types";
+import { assignCharacterAsset, createFrame } from "@/lib/api";
+import { refreshLibrary } from "@/lib/persistence";
+import { SHOT_TYPES, type Asset, type ShotType } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { FrameCard } from "./FrameCard";
 import { AssetLinkPicker } from "./AssetLinkPicker";
-import { Loader2, PenLine, RefreshCw, Sparkles } from "lucide-react";
+import { Loader2, PenLine, RefreshCw, Sparkles, Plus } from "lucide-react";
 
 export function SceneTimeline() {
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [newPrompt, setNewPrompt] = useState("");
+  const [newDescription, setNewDescription] = useState("");
+  const [newNarration, setNewNarration] = useState("");
+  const [newShotType, setNewShotType] = useState<ShotType | null>(null);
+  const [newCharacters, setNewCharacters] = useState<string[]>([]);
   const story = useStoryStore((s) => s.story);
   const activeSceneIndex = useStoryStore((s) => s.activeSceneIndex);
   const activeFrameIndex = useStoryStore((s) => s.activeFrameIndex);
@@ -23,6 +35,7 @@ export function SceneTimeline() {
   const imageQueue = useStoryStore((s) => s.imageQueue);
   const writeAll = useStoryStore((s) => s.writeAll);
   const setActiveScene = useStoryStore((s) => s.setActiveScene);
+  const setActiveFrame = useStoryStore((s) => s.setActiveFrame);
   const replaceFrame = useStoryStore((s) => s.replaceFrame);
 
   // Cached character assets for the assignment dropdown.
@@ -43,6 +56,41 @@ export function SceneTimeline() {
       console.error("Failed to assign character asset:", e);
     }
   }, [story]);
+  const openCreateFrame = () => {
+    setNewPrompt("");
+    setNewDescription("");
+    setNewNarration("");
+    setNewShotType(null);
+    setNewCharacters([]);
+    setCreateError(null);
+    setCreateOpen(true);
+  };
+
+  const handleCreateFrame = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!story || !scene) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const updatedStory = await createFrame(story.id, scene.id, {
+        prompt: newPrompt,
+        description: newDescription,
+        narration: newNarration,
+        shotType: newShotType,
+        characters: newCharacters,
+      });
+      useStoryStore.getState().applyStory(updatedStory);
+      const savedScene = updatedStory.scenes.find((candidate) => candidate.id === scene.id);
+      const newFrameIndex = savedScene?.frames.findIndex((frame) => !story.scenes.some((oldScene) => oldScene.frames.some((oldFrame) => oldFrame.id === frame.id))) ?? -1;
+      if (newFrameIndex >= 0) setActiveFrame(newFrameIndex);
+      await refreshLibrary();
+      setCreateOpen(false);
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "Could not create frame");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   if (!story) return null;
 
@@ -245,21 +293,23 @@ export function SceneTimeline() {
                   Scenes before this one are used as context, so writing in order gives the best continuity.
                 </p>
                 {work?.state === "error" && (
-                  <p role="alert" className="text-sm text-destructive">
-                    {work.message}
-                  </p>
+                  <p role="alert" className="text-sm text-destructive">{work.message}</p>
                 )}
-                <Button onClick={() => writeScene(scene.id)} disabled={Boolean(writeAll)}>
-                  <PenLine />
-                  {work?.state === "error" ? "Try again" : "Write frames"}
-                </Button>
+                <div className="flex gap-2">
+                  <Button onClick={() => writeScene(scene.id)} disabled={Boolean(writeAll)}>
+                    <PenLine />
+                    {work?.state === "error" ? "Try again" : "Write frames"}
+                  </Button>
+                  <Button variant="outline" onClick={openCreateFrame} disabled={Boolean(writeAll)}>
+                    <Plus />
+                    Add frame manually
+                  </Button>
+                </div>
               </div>
             ) : (
               <div className="space-y-4">
                 {work?.state === "error" && (
-                  <p role="alert" className="text-sm text-destructive">
-                    {work.message}
-                  </p>
+                  <p role="alert" className="text-sm text-destructive">{work.message}</p>
                 )}
                 {scene.frames.map((frame, i) => (
                   <FrameCard
@@ -271,11 +321,67 @@ export function SceneTimeline() {
                     onUpdated={replaceFrame}
                   />
                 ))}
+                <div className="flex justify-end">
+                  <Button variant="outline" size="sm" onClick={openCreateFrame} disabled={writing || Boolean(writeAll)}>
+                    <Plus />
+                    Add frame
+                  </Button>
+                </div>
               </div>
             )}
           </div>
         </ScrollArea>
       </div>
+        <Dialog open={createOpen} onOpenChange={(open) => !creating && setCreateOpen(open)}>
+          <DialogContent className="max-h-[min(90vh,48rem)] overflow-y-auto sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Add a frame</DialogTitle>
+              <DialogDescription>Create a draft frame in “{scene.title}”. You can generate its image and voiceover afterward.</DialogDescription>
+            </DialogHeader>
+            <form onSubmit={handleCreateFrame} className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="new-frame-prompt">Image prompt</Label>
+                <Textarea id="new-frame-prompt" name="prompt" value={newPrompt} onChange={(event) => setNewPrompt(event.target.value)} rows={4} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="new-frame-description">Description</Label>
+                <Textarea id="new-frame-description" name="description" value={newDescription} onChange={(event) => setNewDescription(event.target.value)} rows={3} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="new-frame-narration">Narration</Label>
+                <Textarea id="new-frame-narration" name="narration" value={newNarration} onChange={(event) => setNewNarration(event.target.value)} rows={3} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="new-frame-shot">Shot type</Label>
+                <select id="new-frame-shot" name="shotType" value={newShotType ?? ""} onChange={(event) => setNewShotType((event.target.value || null) as ShotType | null)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+                  <option value="">No shot type</option>
+                  {SHOT_TYPES.map((shot) => <option key={shot} value={shot}>{shot}</option>)}
+                </select>
+              </div>
+              {story.characters.length > 0 && (
+                <fieldset className="space-y-2">
+                  <legend className="text-sm font-medium">Characters in frame</legend>
+                  <div className="grid grid-cols-2 gap-2">
+                    {story.characters.map((character) => (
+                      <label key={character.name} className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" checked={newCharacters.includes(character.name)} onChange={(event) => setNewCharacters((current) => event.target.checked ? [...current, character.name] : current.filter((name) => name !== character.name))} />
+                        {character.name}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              )}
+              {createError && <p role="alert" className="text-sm text-destructive">{createError}</p>}
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setCreateOpen(false)} disabled={creating}>Cancel</Button>
+                <Button type="submit" disabled={creating}>
+                  {creating && <Loader2 className="animate-spin" />}
+                  {creating ? "Adding…" : "Add frame"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
     </div>
   );
 }

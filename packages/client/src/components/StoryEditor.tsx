@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { SceneTimeline } from "./SceneTimeline";
 import { GenerateStoryPanel } from "./GenerateStoryPanel";
 import { refreshLibrary } from "@/lib/persistence";
-import { Sparkles, Clapperboard } from "lucide-react";
+import { Sparkles, Clapperboard, BookOpen } from "lucide-react";
+import Link from "next/link";
 
 export function StoryEditor() {
   const { story, setStory } = useStoryStore();
@@ -26,6 +27,11 @@ export function StoryEditor() {
           {story ? story.title : "Storyboard Studio"}
         </h1>
         <div className="flex items-center gap-2">
+          {story && story.scenes.some((scene) => scene.frames.length > 0) && (
+            <Button render={<Link href={`/play/${story.id}`} />} variant="outline" size="sm">
+              <BookOpen /> Read story
+            </Button>
+          )}
           {story && (
             <Button variant="outline" size="sm" onClick={() => setStory(null)}>
               Close story

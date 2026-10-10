@@ -6,10 +6,10 @@ packages/*/node_modules/
 packages/client/.next/
 packages/client/.open-next/
 
-# Env
+# Environment files and local secrets
 .env
-.env.local
-.env*.local
+.env.*
+!.env.example
 
 # OS
 .DS_Store
@@ -25,11 +25,15 @@ packages/client/.open-next/
 # local database
 data/
 
-# Python venv (local model tooling)
+# Python environments and generated files
 .venv/
+**/.venv/
+__pycache__/
+*.py[cod]
 
 # Generated media (images, narration, uploads)
 packages/client/public/media/
+packages/client/data/
 
 # TypeScript incremental build info
 *.tsbuildinfo
